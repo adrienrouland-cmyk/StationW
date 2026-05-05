@@ -154,10 +154,13 @@ def parse_order_with_kimi(order_text: str) -> List[dict]:
     if client is None:
         raise RuntimeError("KIMI_API_KEY not configured. Set KIMI_API_KEY in environment.")
 
+    current_date_utc = datetime.now(timezone.utc).date().isoformat()
+
     # Ask Kimi to extract all order fields that feed the response envelope.
     prompt = (
         "Extract ALL order information from the following text and return ONLY valid JSON.\n"
         "The text may be in French or English. Preserve raw wording when possible and infer structured values when obvious.\n"
+        f"Reference date for relative date interpretation: {current_date_utc}.\n"
         "Use this structure exactly:\n"
         "{\n"
         '  "client": {"raw_identity": {"phone": null, "email": null}},\n'
@@ -177,7 +180,7 @@ def parse_order_with_kimi(order_text: str) -> List[dict]:
         "- For items, use the exact product wording from the source as much as possible.\n"
         "- For quantity, return a number when possible.\n"
         "- For wanted_price, return the unit price if the text states one, otherwise null.\n"
-        "- For date, return ISO-8601 when you can infer it; otherwise null.\n"
+        "- For date, return ISO-8601 when you can infer it; use the reference date to resolve relative dates like 'next Friday'. Otherwise null.\n"
         f"Order text: {order_text}\n\n"
         "Return ONLY valid JSON object, no other text."
 )
