@@ -7,6 +7,7 @@ Includes quote generation functionality
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import Response, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Any
 from datetime import datetime, timezone, date, timedelta
@@ -64,6 +65,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+from fastapi.responses import RedirectResponse
+
+# Mount Dashboard Static Files
+dashboard_path = Path(__file__).resolve().parent / "dashboard"
+dashboard_path.mkdir(parents=True, exist_ok=True)
+
+@app.get("/dashboard")
+async def dashboard_redirect():
+    return RedirectResponse(url="/dashboard/index.html")
+
+app.mount("/dashboard", StaticFiles(directory=dashboard_path, html=True), name="dashboard")
 
 # ==================== Database Setup ====================
 
@@ -1627,6 +1640,165 @@ def build_pdf_response_from_db(request_id: str) -> Response:
 async def generate_quote_from_request_id(request_id: str) -> Response:
     """Generate a quote PDF from a SQLite request ID"""
     return build_pdf_response_from_db(request_id.strip())
+
+# ==================== Dashboard API Endpoints ====================
+
+@app.get("/api/dashboard/clients")
+async def dashboard_clients():
+    """Retrieve clients list for the dashboard"""
+    clients_path = DB_PATH.parent / "database" / "clients.csv"
+    if not clients_path.exists():
+        return {"clients": []}
+        
+    clients = []
+    with open(clients_path, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f, delimiter=";")
+        for row in reader:
+            clients.append({
+                "client_id": row.get("client_id", ""),
+                "company_name": row.get("company_name", ""),
+                "client_score": float(row.get("client_score", "0.5").replace(",", ".")) if row.get("client_score") else 0.5,
+            })
+    return {"clients": clients}
+
+
+@app.get("/api/dashboard/orders")
+async def dashboard_orders():
+    """Retrieve all orders for the dashboard with their computed statuses"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM customer_requests ORDER BY updated_at DESC")
+    rows = cursor.fetchall()
+    conn.close()
+
+    orders_out = []
+    for row in rows:
+        req = dict(row)
+        dashboard_status = req.get("status", "pending")
+        proposals = None
+        
+        if dashboard_status == "pending":
+            missing = json.loads(req.get("missing_fields_json") or "[]")
+            if missing:
+                dashboard_status = "still_getting_info"
+            else:
+                try:
+                    parsed = json.loads(req.get("parsed_json") or "{}")
+                    items = parsed.get("items", [])
+                    products = load_products()
+                    
+                    # Fast match to avoid slow AI calls on dashboard load
+                    def fast_match(name, prods):
+                        if not name: return "NOT_FOUND"
+                        if name in prods: return name
+                        l = name.lower()
+                        for p in prods:
+                            if l in p.lower() or p.lower() in l: return p
+                        return "NOT_FOUND"
+
+                    lines = []
+                    for i, item in enumerate(items, 1):
+                        pname = (item.get('product') or '').strip()
+                        m = fast_match(pname, products)
+                        sku_out = products[m].get('sku_code') if m != "NOT_FOUND" else None
+                        stock_price = products[m].get('price_per_unit') if m != "NOT_FOUND" else None
+                        
+                        qty_val = item.get('quantity')
+                        try: qty_int = int(qty_val) if qty_val is not None else None
+                        except: qty_int = None
+                        
+                        price_val = item.get('wanted_price')
+                        try: w_price = float(price_val) if price_val is not None else None
+                        except: w_price = None
+
+                        lines.append(OrderLine(
+                            line_id=i,
+                            product=ProductInfo(raw_description=pname or "MISSING", normalized=ProductNormalized(sku=sku_out), status="FOUND" if m != "NOT_FOUND" else "NOT_FOUND"),
+                            quantity=qty_int,
+                            pricing=PricingInfo(wanted_unit_price=w_price, stock_unit_price=stock_price)
+                        ))
+                    
+                    if not lines or all((l.product.status or "").upper() == "NOT_FOUND" for l in lines):
+                        dashboard_status = "canceled"
+                    else:
+                        order_response = OrderResponse(
+                            meta=MetaInfo(request_id=req["request_id"], created_at="", intake_channel="", language=""),
+                            client=ClientInfo(raw_identity=RawIdentity(), client_score=0.5),
+                            order_status="pending_payement",
+                            order_lines=lines
+                        )
+                        
+                        res = await validate_order(order_response)
+                        
+                        if res.get("result") == "NEGOTIATING":
+                            dashboard_status = "negotiating"
+                            proposals = res.get("next_step", {}).get("proposals", [])
+                        elif res.get("result") == "CANCELED":
+                            dashboard_status = "canceled"
+                        elif res.get("result") == "VALIDATED":
+                            dashboard_status = "ready_for_quote"
+                except Exception as e:
+                    logger.error(f"Error validating order {req['request_id']}: {e}")
+                    dashboard_status = "error"
+
+        orders_out.append({
+            "request_id": req["request_id"],
+            "created_at": req["created_at"],
+            "order_text": req["order_text"],
+            "status": dashboard_status,
+            "proposals": proposals,
+            "delivery_address": req.get("delivery_address"),
+            "delivery_country": req.get("delivery_country")
+        })
+        
+    return {"orders": orders_out}
+
+
+@app.post("/api/dashboard/orders/{request_id}/send-quote")
+async def dashboard_send_quote(request_id: str):
+    """Generate the quote PDF and mark the order as quote_sent"""
+    try:
+        response = build_pdf_response_from_db(request_id)
+        pdf_bytes = response.body
+        
+        config = load_config()
+        template_path = resolve_path(config["quote"]["template_path"])
+        output_dir = Path(template_path).resolve().parents[1] / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        pdf_path = output_dir / f"quote_{request_id}.pdf"
+        pdf_path.write_bytes(pdf_bytes)
+        
+        update_request_field(request_id, "status", "quote_sent")
+        return {"success": True, "status": "quote_sent", "pdf_path": str(pdf_path)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ProposalUpdate(BaseModel):
+    proposals: List[dict]
+
+
+@app.post("/api/dashboard/orders/{request_id}/update-lines")
+async def update_order_lines(request_id: str, update: ProposalUpdate):
+    """Update order items based on human modifications to the proposals"""
+    req = get_request_from_db(request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Not found")
+    
+    parsed = json.loads(req.get("parsed_json") or "{}")
+    items = parsed.get("items", [])
+    
+    for prop in update.proposals:
+        line_id = prop.get("line_id")
+        if 1 <= line_id <= len(items):
+            item = items[line_id - 1]
+            item["quantity"] = prop["proposal"]["offer_quantity"]
+            item["wanted_price"] = prop["proposal"]["offer_unit_price"]
+            
+    update_request_field(request_id, "parsed_json", parsed)
+    update_request_field(request_id, "items_json", items)
+    
+    return {"success": True}
 
 if __name__ == "__main__":
     import uvicorn
