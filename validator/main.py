@@ -5,7 +5,8 @@ Includes quote generation functionality
 """
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import Response, JSONResponse
+from fastapi.responses import Response, JSONResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Any
 from datetime import datetime, timezone, date, timedelta
@@ -20,6 +21,12 @@ import json
 import yaml
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+import sqlite3
+import logging
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -48,6 +55,170 @@ app = FastAPI(
     description="Parse natural language orders and match them with product inventory. Includes quote generation.",
     version="1.0.0"
 )
+
+# Add CORS middleware to allow web app to make requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ==================== Database Setup ====================
+
+DB_PATH = Path(__file__).resolve().parent.parent / "customer_requests.db"
+
+
+def init_db():
+    """Initialize SQLite database schema"""
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    # Create customer_requests table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS customer_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT UNIQUE NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            order_text TEXT,
+            parsed_json TEXT,
+            delivery_address TEXT,
+            delivery_country TEXT,
+            items_json TEXT,
+            missing_fields_json TEXT,
+            prompt_text TEXT,
+            status TEXT DEFAULT 'pending',
+            notes TEXT
+        )
+    """)
+    
+    conn.commit()
+    conn.close()
+    logger.info(f"Database initialized at {DB_PATH}")
+
+
+def get_db():
+    """Get database connection"""
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def save_request_to_db(request_id: str, parsed_json: dict, order_text: str = "", missing_fields: List[str] = None, prompt_text: str = "") -> None:
+    """Save or update a parsed request in the database"""
+    conn = get_db()
+    cursor = conn.cursor()
+    now = datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
+    
+    # Extract fields from parsed JSON
+    delivery = parsed_json.get("delivery", {})
+    delivery_address = delivery.get("raw_address") if isinstance(delivery, dict) else None
+    delivery_country = delivery.get("country") if isinstance(delivery, dict) else None
+    items = parsed_json.get("items", [])
+    
+    try:
+        cursor.execute("""
+            INSERT INTO customer_requests 
+            (request_id, created_at, updated_at, order_text, parsed_json, delivery_address, 
+             delivery_country, items_json, missing_fields_json, prompt_text, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+            ON CONFLICT(request_id) DO UPDATE SET
+                updated_at = ?,
+                order_text = ?,
+                parsed_json = ?,
+                delivery_address = ?,
+                delivery_country = ?,
+                items_json = ?,
+                missing_fields_json = ?,
+                prompt_text = ?
+        """, (
+            request_id, now, now, order_text, json.dumps(parsed_json),
+            delivery_address, delivery_country, json.dumps(items),
+            json.dumps(missing_fields or []), prompt_text,
+            # Values for UPDATE
+            now, order_text, json.dumps(parsed_json),
+            delivery_address, delivery_country, json.dumps(items),
+            json.dumps(missing_fields or []), prompt_text
+        ))
+        conn.commit()
+        logger.info(f"Request {request_id} saved to database")
+    except Exception as e:
+        logger.error(f"Error saving request to database: {e}")
+    finally:
+        conn.close()
+
+
+def get_request_from_db(request_id: str) -> Optional[dict]:
+    """Retrieve a request from the database"""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("SELECT * FROM customer_requests WHERE request_id = ?", (request_id,))
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        return None
+    finally:
+        conn.close()
+
+
+def find_requests_with_missing_fields(limit: int = 10) -> List[dict]:
+    """Find all requests with missing required fields"""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT * FROM customer_requests 
+            WHERE (delivery_address IS NULL OR delivery_address = '')
+               OR (delivery_country IS NULL OR delivery_country = '')
+               OR (items_json = '[]' OR items_json IS NULL)
+            ORDER BY updated_at DESC
+            LIMIT ?
+        """, (limit,))
+        
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def update_request_field(request_id: str, field_name: str, field_value: Any) -> None:
+    """Update a specific field in a customer request"""
+    conn = get_db()
+    cursor = conn.cursor()
+    now = datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
+    
+    valid_fields = [
+        'delivery_address', 'delivery_country', 'items_json',
+        'missing_fields_json', 'prompt_text', 'status', 'notes', 'parsed_json'
+    ]
+    
+    if field_name not in valid_fields:
+        raise ValueError(f"Invalid field: {field_name}")
+    
+    try:
+        if field_name in ['items_json', 'missing_fields_json', 'parsed_json']:
+            field_value = json.dumps(field_value) if not isinstance(field_value, str) else field_value
+        
+        cursor.execute(f"""
+            UPDATE customer_requests 
+            SET {field_name} = ?, updated_at = ?
+            WHERE request_id = ?
+        """, (field_value, now, request_id))
+        
+        conn.commit()
+        logger.info(f"Updated {field_name} for request {request_id}")
+    finally:
+        conn.close()
+
+
+# Initialize database on startup
+init_db()
 
 # ==================== Quote Engine Helper Functions ====================
 
@@ -540,9 +711,7 @@ class PaymentTermsInfo(BaseModel):
 
 
 class OrderResponse(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    meta: MetaInfo = Field(alias="_meta")
+    meta: MetaInfo
     client: ClientInfo
     order_status: str
     order_lines: List[OrderLine]
@@ -553,6 +722,10 @@ class OrderResponse(BaseModel):
 class OrderRequest(BaseModel):
     order_text: str
     client_id: Optional[str] = None
+
+
+class UpdateRequest(BaseModel):
+    new_order_text: str
 
 # CSV utilities
 def load_products() -> dict:
@@ -732,44 +905,61 @@ async def validate_order(order: OrderResponse):
     }
 
 # AI parsing function
-def parse_order_with_kimi(order_text: str) -> List[dict]:
+def parse_order_with_kimi(order_text: str, current_state: Optional[dict] = None) -> dict:
     """
-    Use Kimi API to parse natural language order text
-    Returns list of dicts with product, quantity, and date
+    Use Kimi API to parse natural language order text.
+    If current_state is provided, it merges the new information into the existing state.
+    Returns dict with structured order data.
     """
     if client is None:
         raise RuntimeError("KIMI_API_KEY not configured. Set KIMI_API_KEY in environment.")
 
     current_date_utc = datetime.now(timezone.utc).date().isoformat()
 
-    # Ask Kimi to extract all order fields that feed the response envelope.
-    prompt = (
-        "Extract ALL order information from the following text and return ONLY valid JSON.\n"
-        "The text may be in French or English. Preserve raw wording when possible and infer structured values when obvious.\n"
-        f"Reference date for relative date interpretation: {current_date_utc}.\n"
-        "Use this structure exactly:\n"
-        "{\n"
-        '  "client": {"raw_identity": {"phone": null, "email": null}},\n'
-        '  "delivery": {"raw_address": null, "country": null, "pick_up": null},\n'
-        '  "payment_terms": {"raw": null, "type": null, "details": null},\n'
-        '  "items": [\n'
-        '    {"product": <string or null>, "quantity": <number or null>, "date": <ISO date or null>, "wanted_price": <number or null>}\n'
-        "  ]\n"
-        "}\n\n"
-        "Rules:\n"
-        "- Extract every product line or requested item, even if the text contains many items.\n"
-        "- Keep one object per line item in the items array.\n"
-        "- Fill client.raw_identity.phone if a phone number is present. Fill client.raw_identity.email if an email is present.\n"
-        "- Put the full delivery address in delivery.raw_address when present. Set delivery.country when it can be inferred.\n"
-        "- Set delivery.pick_up to true only if the text explicitly asks for pickup or collection.\n"
-        "- Put the raw payment phrase in payment_terms.raw, classify payment_terms.type when possible (for example net_30, prepaid, cash_on_delivery, bank_transfer, card, other), and put a short explanation in payment_terms.details.\n"
-        "- For items, use the exact product wording from the source as much as possible.\n"
-        "- For quantity, return a number when possible.\n"
-        "- For wanted_price, return the unit price if the text states one, otherwise null.\n"
-        "- For date, return ISO-8601 when you can infer it; use the reference date to resolve relative dates like 'next Friday'. Otherwise null.\n"
-        f"Order text: {order_text}\n\n"
-        "Return ONLY valid JSON object, no other text."
-)
+    if current_state:
+        # Update mode
+        prompt = (
+            "You are an order processing assistant. Below is the CURRENT state of an order in JSON format:\n"
+            f"{json.dumps(current_state, indent=2)}\n\n"
+            f"The customer has sent a NEW message: \"{order_text}\"\n\n"
+            "Your task is to UPDATE the order state based on this new message. Follow these rules:\n"
+            "1. KEEP all existing information that is not contradicted or changed by the new message.\n"
+            "2. If the message adds new items, append them to the 'items' list.\n"
+            "3. If the message provides missing details (like delivery address or country), fill them in.\n"
+            "4. If the message corrects existing info, update those fields.\n"
+            "5. Maintain the same JSON structure as the input.\n"
+            "6. Return ONLY the complete updated JSON object.\n"
+            f"Reference date for relative date interpretation: {current_date_utc}.\n"
+        )
+    else:
+        # Extraction mode
+        prompt = (
+            "Extract ALL order information from the following text and return ONLY valid JSON.\n"
+            "The text may be in French or English. Preserve raw wording when possible and infer structured values when obvious.\n"
+            f"Reference date for relative date interpretation: {current_date_utc}.\n"
+            "Use this structure exactly:\n"
+            "{\n"
+            '  "client": {"raw_identity": {"phone": null, "email": null}},\n'
+            '  "delivery": {"raw_address": null, "country": null, "pick_up": null},\n'
+            '  "payment_terms": {"raw": null, "type": null, "details": null},\n'
+            '  "items": [\n'
+            '    {"product": <string or null>, "quantity": <number or null>, "date": <ISO date or null>, "wanted_price": <number or null>}\n'
+            "  ]\n"
+            "}\n\n"
+            "Rules:\n"
+            "- Extract every product line or requested item, even if the text contains many items.\n"
+            "- Keep one object per line item in the items array.\n"
+            "- Fill client.raw_identity.phone if a phone number is present. Fill client.raw_identity.email if an email is present.\n"
+            "- Put the full delivery address in delivery.raw_address when present. Set delivery.country when it can be inferred.\n"
+            "- Set delivery.pick_up to true only if the text explicitly asks for pickup or collection.\n"
+            "- Put the raw payment phrase in payment_terms.raw, classify payment_terms.type when possible (for example net_30, prepaid, cash_on_delivery, bank_transfer, card, other), and put a short explanation in payment_terms.details.\n"
+            "- For items, use the exact product wording from the source as much as possible.\n"
+            "- For quantity, return a number when possible.\n"
+            "- For wanted_price, return the unit price if the text states one, otherwise null.\n"
+            "- For date, return ISO-8601 when you can infer it; use the reference date to resolve relative dates like 'next Friday'. Otherwise null.\n"
+            f"Order text: {order_text}\n\n"
+            "Return ONLY valid JSON object, no other text."
+        )
 
     response = client.chat.completions.create(
         model="kimi-k2.6",
@@ -854,6 +1044,152 @@ Do not return anything else, just the product name or NOT_FOUND."""
         return "NOT_FOUND"
     return matched_product
 
+
+def build_order_lines(parsed_items: list, products: dict) -> List[OrderLine]:
+    """Build OrderLine objects from parsed items and inventory products"""
+    order_lines = []
+    for index, item in enumerate(parsed_items, start=1):
+        product_name_raw = (item.get('product') or '').strip()
+        quantity = item.get('quantity')
+        date_wanted = item.get('date')
+        wanted_price = item.get('wanted_price')
+
+        try:
+            quantity_int = int(quantity) if quantity is not None else None
+        except Exception:
+            quantity_int = None
+
+        try:
+            wanted_price_val = float(wanted_price) if wanted_price is not None else None
+        except Exception:
+            wanted_price_val = None
+
+        matched_product = match_product_with_ai(product_name_raw, products)
+
+        if matched_product != "NOT_FOUND":
+            sku_out = products[matched_product].get('sku_code') or None
+            stock_unit_price = products[matched_product].get('price_per_unit')
+        else:
+            sku_out = None
+            stock_unit_price = None
+
+        order_lines.append(
+            OrderLine(
+                line_id=index,
+                product=ProductInfo(
+                    raw_description=product_name_raw or "MISSING",
+                    normalized=ProductNormalized(sku=sku_out),
+                    status="FOUND" if matched_product != "NOT_FOUND" else "NOT_FOUND",
+                ),
+                quantity=quantity_int,
+                date_wanted=date_wanted if date_wanted else None,
+                pricing=PricingInfo(
+                    wanted_unit_price=wanted_price_val,
+                    stock_unit_price=stock_unit_price,
+                ),
+            )
+        )
+    return order_lines
+
+
+def find_missing_fields_and_generate_prompt(
+    json_data: dict,
+    required_fields: Optional[List[str]] = None,
+    request_id: Optional[str] = None
+) -> dict[str, Any]:
+    """
+    Find missing fields in parsed JSON and use Kimi to generate a prompt text asking for them.
+    Optionally saves results to database.
+    
+    Args:
+        json_data: The JSON object to check for missing fields
+        required_fields: List of required field names. If None, uses defaults for order parsing
+        request_id: Optional request ID to save results to database
+    
+    Returns:
+        {
+            "missing_fields": List[str],
+            "prompt_text": str,
+            "has_missing_fields": bool
+        }
+    """
+    if client is None:
+        raise RuntimeError("KIMI_API_KEY not configured. Set KIMI_API_KEY in environment.")
+    
+    # Default required fields for order parsing
+    if required_fields is None:
+        required_fields = [
+            "delivery.raw_address",
+            "delivery.country",
+            "items",
+        ]
+    
+    # Find missing fields
+    missing_fields = []
+    
+    for field_path in required_fields:
+        parts = field_path.split(".")
+        value = json_data
+        
+        # Navigate through nested structure
+        for part in parts:
+            if isinstance(value, dict):
+                value = value.get(part)
+            else:
+                value = None
+                break
+        
+        # Check if field is missing, None, or empty
+        if value is None or value == "" or (isinstance(value, list) and len(value) == 0):
+            missing_fields.append(field_path)
+    
+    # If no missing fields, return early
+    if not missing_fields:
+        return {
+            "missing_fields": [],
+            "prompt_text": "",
+            "has_missing_fields": False
+        }
+    
+    # Generate prompt text using Kimi
+    field_descriptions = {
+        "delivery.raw_address": "delivery address",
+        "delivery.country": "delivery country",
+        "items": "product items/lines for the order",
+    }
+    
+    missing_descriptions = [field_descriptions.get(f, f) for f in missing_fields]
+    
+    prompt = f"""Generate a concise and direct message asking the customer for the following missing information:
+{', '.join(missing_descriptions)}
+
+Make the message professional but friendly. Keep it to one short paragraph. 
+Use the language appropriate for business context (French or English).
+Focus on what is needed, be direct and to the point.
+
+Return ONLY the message text, no introduction or explanation."""
+    
+    response = client.chat.completions.create(
+        model="kimi-k2.6",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.5,
+    )
+    
+    prompt_text = response.choices[0].message.content.strip()
+    
+    logger.info(f"Generated Kimi message: {prompt_text}")
+    
+    # Save to database if request_id provided
+    if request_id:
+        update_request_field(request_id, "missing_fields_json", missing_fields)
+        update_request_field(request_id, "prompt_text", prompt_text)
+    
+    return {
+        "missing_fields": missing_fields,
+        "prompt_text": prompt_text,
+        "has_missing_fields": len(missing_fields) > 0
+    }
+
 # Main endpoint
 @app.post("/parse-order", response_model=OrderResponse)
 async def parse_order(request: OrderRequest) -> OrderResponse:
@@ -875,49 +1211,7 @@ async def parse_order(request: OrderRequest) -> OrderResponse:
         parsed = parse_order_with_kimi(request.order_text)
         parsed_items = parsed.get('items', []) if isinstance(parsed, dict) else []
 
-        order_lines = []
-
-        for index, item in enumerate(parsed_items, start=1):
-            product_name_raw = (item.get('product') or '').strip()
-            quantity = item.get('quantity')
-            date_wanted = item.get('date')
-            wanted_price = item.get('wanted_price')
-
-            try:
-                quantity_int = int(quantity) if quantity is not None else None
-            except Exception:
-                quantity_int = None
-
-            try:
-                wanted_price_val = float(wanted_price) if wanted_price is not None else None
-            except Exception:
-                wanted_price_val = None
-
-            matched_product = match_product_with_ai(product_name_raw, products)
-
-            if matched_product != "NOT_FOUND":
-                sku_out = products[matched_product].get('sku_code') or None
-                stock_unit_price = products[matched_product].get('price_per_unit')
-            else:
-                sku_out = None
-                stock_unit_price = None
-
-            order_lines.append(
-                OrderLine(
-                    line_id=index,
-                    product=ProductInfo(
-                        raw_description=product_name_raw or "MISSING",
-                        normalized=ProductNormalized(sku=sku_out),
-                        status="FOUND" if matched_product != "NOT_FOUND" else "NOT_FOUND",
-                    ),
-                    quantity=quantity_int,
-                    date_wanted=date_wanted if date_wanted else None,
-                    pricing=PricingInfo(
-                        wanted_unit_price=wanted_price_val,
-                        stock_unit_price=stock_unit_price,
-                    ),
-                )
-            )
+        order_lines = build_order_lines(parsed_items, products)
 
         if not order_lines:
             raise HTTPException(status_code=400, detail="Could not parse any products from the order text")
@@ -940,7 +1234,20 @@ async def parse_order(request: OrderRequest) -> OrderResponse:
         request_id = f"req_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{os.urandom(3).hex()}"
         created_at = datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
 
-        return OrderResponse(
+        # Save parsed order to database
+        save_request_to_db(
+            request_id,
+            parsed,
+            order_text=request.order_text,
+        )
+        
+        # Check for missing required fields and generate prompt
+        missing_fields_result = find_missing_fields_and_generate_prompt(
+            parsed,
+            request_id=request_id
+        )
+
+        response = OrderResponse(
             meta=MetaInfo(
                 request_id=request_id,
                 created_at=created_at,
@@ -966,6 +1273,14 @@ async def parse_order(request: OrderRequest) -> OrderResponse:
                 details=parsed_payment_terms.get('details') if isinstance(parsed_payment_terms, dict) else None,
             ),
         )
+        
+        # Add missing fields info to response
+        response_dict = response.model_dump()
+        if missing_fields_result["has_missing_fields"]:
+            response_dict["missing_fields"] = missing_fields_result["missing_fields"]
+            response_dict["prompt_text"] = missing_fields_result["prompt_text"]
+        
+        return JSONResponse(status_code=200, content=response_dict)
     
     except FileNotFoundError as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -987,14 +1302,148 @@ async def root():
         "version": "1.0.0",
         "endpoints": {
             "POST /parse-order": "Parse a natural language order",
+            "GET /request/{request_id}": "Retrieve a parsed request",
+            "GET /requests/missing": "Find all requests with missing fields",
+            "POST /request/{request_id}/update": "Update a request with new order text",
+            "POST /request/{request_id}/field": "Update a specific field in a request",
             "GET /quote/{order_id}": "Generate a quote PDF for an order",
-            "GET /": "Query parameter version - GET /?order_id=...",
             "GET /health": "Health check",
+            "GET /app": "Interactive SMS chat app",
             "GET /docs": "API documentation"
         }
     }
 
-# ==================== Quote Generation Endpoints ====================
+
+@app.get("/app")
+async def get_app():
+    """Serve the SMS chat web app"""
+    app_path = BASE_DIR / "app.html"
+    if not app_path.exists():
+        raise HTTPException(status_code=404, detail="App not found")
+    return FileResponse(app_path, media_type="text/html")
+
+
+# ==================== Database Endpoints ====================
+
+@app.get("/request/{request_id}")
+async def get_request(request_id: str):
+    """Retrieve a parsed request from the database"""
+    request_data = get_request_from_db(request_id)
+    
+    if not request_data:
+        raise HTTPException(status_code=404, detail=f"Request {request_id} not found")
+    
+    # Parse JSON fields
+    if request_data.get("parsed_json"):
+        request_data["parsed_json"] = json.loads(request_data["parsed_json"])
+    if request_data.get("items_json"):
+        request_data["items_json"] = json.loads(request_data["items_json"])
+    if request_data.get("missing_fields_json"):
+        request_data["missing_fields_json"] = json.loads(request_data["missing_fields_json"])
+    
+    return request_data
+
+
+@app.get("/requests/missing")
+async def get_requests_with_missing_fields(limit: int = Query(10, ge=1, le=100)):
+    """Find all requests with missing required fields"""
+    requests = find_requests_with_missing_fields(limit)
+    
+    # Parse JSON fields
+    for req in requests:
+        if req.get("parsed_json"):
+            req["parsed_json"] = json.loads(req["parsed_json"])
+        if req.get("items_json"):
+            req["items_json"] = json.loads(req["items_json"])
+        if req.get("missing_fields_json"):
+            req["missing_fields_json"] = json.loads(req["missing_fields_json"])
+    
+    return {"total": len(requests), "requests": requests}
+
+
+@app.post("/request/{request_id}/update")
+async def update_request_with_text(request_id: str, update: UpdateRequest):
+    """Update a request with new order text and re-parse"""
+    new_order_text = update.new_order_text
+    existing = get_request_from_db(request_id)
+    
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Request {request_id} not found")
+    
+    try:
+        # Re-parse with new text, merging with existing state
+        products = load_products()
+        previous_parsed = json.loads(existing['parsed_json']) if existing.get('parsed_json') else None
+        parsed = parse_order_with_kimi(new_order_text, current_state=previous_parsed)
+        
+        # Re-build order lines with product matching
+        parsed_items = parsed.get('items', []) if isinstance(parsed, dict) else []
+        order_lines = build_order_lines(parsed_items, products)
+        
+        # Update combined order text
+        combined_text = f"{existing['order_text']}\n---\n{new_order_text}"
+        
+        # Save updated information
+        save_request_to_db(request_id, parsed, order_text=combined_text)
+        
+        # Check for missing fields again
+        missing_fields_result = find_missing_fields_and_generate_prompt(
+            parsed,
+            request_id=request_id
+        )
+        
+        updated = get_request_from_db(request_id)
+        
+        # Parse JSON fields
+        if updated.get("parsed_json"):
+            updated["parsed_json"] = json.loads(updated["parsed_json"])
+        if updated.get("items_json"):
+            updated["items_json"] = json.loads(updated["items_json"])
+        if updated.get("missing_fields_json"):
+            updated["missing_fields_json"] = json.loads(updated["missing_fields_json"])
+        
+        return {
+            "meta": {"request_id": request_id},
+            "order_lines": order_lines,
+            "missing_fields": missing_fields_result["missing_fields"],
+            "prompt_text": missing_fields_result["prompt_text"]
+        }
+        
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error updating request: {str(e)}")
+
+
+@app.post("/request/{request_id}/field")
+async def update_request_field_endpoint(request_id: str, field_name: str, value: str):
+    """Update a specific field in a request"""
+    existing = get_request_from_db(request_id)
+    
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Request {request_id} not found")
+    
+    try:
+        update_request_field(request_id, field_name, value)
+        
+        updated = get_request_from_db(request_id)
+        
+        # Parse JSON fields
+        if updated.get("parsed_json"):
+            updated["parsed_json"] = json.loads(updated["parsed_json"])
+        if updated.get("items_json"):
+            updated["items_json"] = json.loads(updated["items_json"])
+        if updated.get("missing_fields_json"):
+            updated["missing_fields_json"] = json.loads(updated["missing_fields_json"])
+        
+        return {"success": True, "request": updated}
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error updating field: {str(e)}")
+
+
 
 def build_pdf_response(order_id: str) -> Response:
     """Build a PDF response for a quote"""
@@ -1061,6 +1510,123 @@ async def generate_quote_from_path(order_id: str) -> Response:
 async def generate_quote_from_query(order_id: str = Query(...)) -> Response:
     """Generate a quote PDF from a query parameter"""
     return build_pdf_response(order_id.strip())
+
+
+def build_pdf_response_from_db(request_id: str) -> Response:
+    """Build a PDF response for a quote using data from SQLite database"""
+    config = load_config()
+    supplier = config["supplier"]
+    export_path = resolve_path(config["quote_export"]["path"])
+    template_path = resolve_path(config["quote"]["template_path"])
+    logo_path = resolve_path(supplier.get("logo_path", "assets/logo.png"))
+
+    # 1. Get request from DB
+    req_data = get_request_from_db(request_id)
+    if not req_data:
+        raise HTTPException(status_code=404, detail=f"Request {request_id} not found")
+
+    # 2. Load products for prices and SKUs
+    products_db = load_products()
+    
+    # 3. Build lines from items_json
+    items_raw = json.loads(req_data.get('parsed_json', '{}')).get('items', [])
+    order_lines_pydantic = build_order_lines(items_raw, products_db)
+    
+    lines = []
+    for line in order_lines_pydantic:
+        qty = line.quantity or 1
+        unit_price = Decimal(str(line.pricing.stock_unit_price or 0))
+        line_total = qty * unit_price
+        
+        lines.append({
+            "line_id": line.line_id,
+            "sku": line.product.normalized.sku or "N/A",
+            "product_name": line.product.raw_description,
+            "description_specs": "",
+            "qty": qty,
+            "unit": "unit",
+            "unit_price_eur": unit_price,
+            "line_total_ht": line_total,
+            "unit_price_eur_fmt": _format_money(unit_price),
+            "line_total_ht_fmt": _format_money(line_total),
+        })
+
+    # 4. Build order object
+    order = {
+        "order_id": request_id,
+        "order_date": req_data['created_at'][:10],
+        "delivery_address": req_data.get('delivery_address'),
+        "delivery_date": None,
+        "has_express": False
+    }
+
+    # 5. Build client object
+    client = {
+        "company_name": "Client",
+        "contact_name": "",
+        "address": req_data.get('delivery_address') or "",
+        "city": req_data.get('delivery_country') or "",
+        "siret": "",
+        "email": "",
+        "phone": ""
+    }
+
+    # 6. Calculate totals
+    totals = calculate_totals({"lines": lines}, config)
+
+    # 7. Generate PDF
+    emission = date.today()
+    validity = emission + timedelta(days=int(config["quote"]["validity_days"]))
+    logo_b64 = load_logo_base64(logo_path)
+    
+    # Prepare Jinja environment
+    template_file = Path(template_path)
+    environment = Environment(
+        loader=FileSystemLoader(str(template_file.parent)),
+        autoescape=select_autoescape(["html", "xml"]),
+    )
+    template = environment.get_template(template_file.name)
+    
+    # We need a dummy quote number for DB requests
+    # Use part of the request_id or a separate sequence
+    quote_number = int(datetime.now().strftime("%H%M%S"))
+    quote_year = datetime.now().year
+
+    html = template.render(
+        supplier=supplier,
+        client=client,
+        order=order,
+        lines=lines,
+        totals=totals,
+        quote_number=quote_number,
+        quote_year=quote_year,
+        emission_date=emission.strftime("%d/%m/%Y"),
+        validity_date=validity.strftime("%d/%m/%Y"),
+        logo_b64=logo_b64,
+        config=config,
+        has_express=False,
+        express_fee=Decimal("0"),
+    )
+    
+    pdf_bytes = render_pdf(html)
+    filename = f"quote_{request_id}.pdf"
+    
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Quote-Number": str(quote_number),
+            "X-Order-Id": request_id,
+            "X-Total-TTC": str(totals["total_ttc"]),
+        },
+    )
+
+
+@app.get("/request/{request_id}/quote")
+async def generate_quote_from_request_id(request_id: str) -> Response:
+    """Generate a quote PDF from a SQLite request ID"""
+    return build_pdf_response_from_db(request_id.strip())
 
 if __name__ == "__main__":
     import uvicorn

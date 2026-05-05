@@ -32,3 +32,4 @@ env/
 quote/assets/
 quote/exports/
 quote/output/
+venv_test/
