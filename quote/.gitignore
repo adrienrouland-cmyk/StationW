@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.py[cod]
+
+db.sqlite
+output/*.pdf
+data/*.xlsx
+data/*.xls
+
+.DS_Store
