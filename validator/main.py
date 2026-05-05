@@ -51,6 +51,7 @@ class RawIdentity(BaseModel):
 
 class ClientInfo(BaseModel):
     raw_identity: RawIdentity
+    client_score: Optional[float] = 0.5  # Between 0 (no discount) and 1 (max 20% discount)
 
 
 class ProductNormalized(BaseModel):
@@ -192,6 +193,8 @@ async def validate_order(order: OrderResponse):
         products = {}
 
     negotiating_items = []
+    client_score = order.client.client_score if order.client else 0.5
+    client_score = max(0.0, min(1.0, client_score))  # Clamp to [0, 1]
 
     for line in order.order_lines:
         line_id = line.line_id
@@ -227,18 +230,29 @@ async def validate_order(order: OrderResponse):
         # Decide if this line is acceptable
         qty_issue = False
         price_issue = False
+        offered_qty = requested_qty
+        offered_price = wanted_price
 
-        if inv_qty is not None:
-            if requested_qty > inv_qty:
-                qty_issue = True
-        # if no authoritative inv_qty, assume provided quantity is acceptable (we can't verify)
+        # Check quantity issue
+        if inv_qty is not None and requested_qty > inv_qty:
+            qty_issue = True
+            offered_qty = inv_qty  # Offer available quantity
 
-        if inv_price is not None and wanted_price is not None:
-            if inv_price < wanted_price:
+        # Check price issue and calculate discount-adjusted price
+        authoritative_price = inv_price if inv_price is not None else stock_price
+
+        if authoritative_price is not None and wanted_price is not None:
+            # Price issue: client asks a price lower than our stock price
+            if wanted_price < authoritative_price:
                 price_issue = True
-        elif stock_price is not None and wanted_price is not None:
-            if stock_price < wanted_price:
-                price_issue = True
+                # Calculate discount based on client_score
+                # Discount ranges from 0% (score=0) to 20% (score=1)
+                max_discount = 0.2
+                discount = max_discount * client_score
+                # Minimum price we accept = stock_price * (1 - discount)
+                min_acceptable_price = authoritative_price * (1 - discount)
+                # Offer price: max between what client wants and our minimum acceptable
+                offered_price = max(wanted_price, min_acceptable_price)
 
         if qty_issue or price_issue:
             negotiating_items.append({
@@ -247,10 +261,11 @@ async def validate_order(order: OrderResponse):
                 "requested_quantity": requested_qty,
                 "available_quantity": inv_qty,
                 "wanted_unit_price": wanted_price,
-                "stock_unit_price": inv_price if inv_price is not None else stock_price,
+                "stock_unit_price": authoritative_price,
+                "client_score": client_score,
                 "proposal": {
-                    "offer_quantity": inv_qty if inv_qty is not None else min(requested_qty, 0),
-                    "offer_unit_price": inv_price if inv_price is not None else stock_price,
+                    "offer_quantity": offered_qty,
+                    "offer_unit_price": offered_price,
                 }
             })
 
