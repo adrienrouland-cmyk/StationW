@@ -290,7 +290,7 @@
         <th>No.</th>
         <th>Reference</th>
         <th class="description">Description & specs</th>
-        <th class="numeric">Qty</th>
+        <th class="numeric">Quantity</th>
         <th class="numeric">Unit price excl. VAT</th>
         <th class="numeric">Amount excl. VAT</th>
       </tr>
@@ -346,9 +346,6 @@
     <strong>Late payment penalties:</strong> {{ config.quote.penalty_rate }}<br>
     {% if config.quote.reserve_clause %}
       <strong>Retention of title:</strong> goods remain the supplier's property until full payment has been received.
-    {% endif %}
-    {% if order.notes %}
-      <br><strong>Notes:</strong> {{ order.notes }}
     {% endif %}
   </section>
 

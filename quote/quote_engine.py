@@ -232,14 +232,10 @@ def get_order(data: dict[str, pd.DataFrame], order_id: str) -> dict[str, Any]:
     )
 
     lines: list[dict[str, Any]] = []
-    notes: list[str] = []
     for index, row in enriched.reset_index(drop=True).iterrows():
         qty = _clean_int(row.get("qty", 0))
         unit_price = _clean_decimal(row.get("unit_price_eur", 0))
         line_total = qty * unit_price
-        note = _clean_str(row.get("notes", ""))
-        if note:
-            notes.append(note)
 
         lines.append(
             {
@@ -267,7 +263,6 @@ def get_order(data: dict[str, pd.DataFrame], order_id: str) -> dict[str, Any]:
         "delivery_address": _clean_str(first_line.get("delivery_address", "")),
         "delivery_date": _format_date(first_line.get("delivery_date", "")),
         "agent_decision": _clean_str(first_line.get("agent_decision", "")),
-        "notes": "\n".join(dict.fromkeys(notes)),
     }
 
 
