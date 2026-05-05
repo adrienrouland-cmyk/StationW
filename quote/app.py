@@ -29,7 +29,7 @@ def build_pdf_response(order_id: str) -> Response:
     config = load_config()
     supplier = config["supplier"]
     data_path = resolve_path(config["data"].get("path", config["data"]["excel_path"]))
-    db_path = resolve_path(config["db"]["path"])
+    export_path = resolve_path(config["quote_export"]["path"])
     template_path = resolve_path(config["quote"]["template_path"])
     logo_path = resolve_path(supplier.get("logo_path", "assets/logo.png"))
 
@@ -46,7 +46,7 @@ def build_pdf_response(order_id: str) -> Response:
     except ValueError as exc:
         raise HTTPException(
             status_code=404,
-            detail=f"Commande introuvable: {order_id}",
+            detail=f"Order not found: {order_id}",
         ) from exc
 
     totals = calculate_totals(order, config)
@@ -56,7 +56,7 @@ def build_pdf_response(order_id: str) -> Response:
             order_id=order_id,
             excel_path=data_path,
             config=config,
-            db_path=db_path,
+            export_path=export_path,
             template_path=template_path,
             logo_path=logo_path,
         )
@@ -66,7 +66,7 @@ def build_pdf_response(order_id: str) -> Response:
             detail=f"Generation PDF impossible: {exc}",
         ) from exc
 
-    filename = f"devis_{quote_number:05d}_{order_id}.pdf"
+    filename = f"quote_{quote_number:05d}_{order_id}.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

@@ -12,14 +12,14 @@ data:
   path: "../database/orders.csv"
   excel_path: "data/overnight_agent_mock_db_v2.xlsx"
 
-db:
-  path: "db.sqlite"
+quote_export:
+  path: "exports/quotes.csv"
 
 quote:
   validity_days: 30
   tva_rate: 0.20
   default_incoterm: "DAP - Delivered at Place"
-  penalty_rate: "3 fois le taux d'intérêt légal en vigueur"
-  payment_default: "Virement bancaire IBAN joint"
+  penalty_rate: "3 times the applicable statutory interest rate"
+  payment_default: "Bank transfer"
   reserve_clause: true
   template_path: "templates/quote.html"

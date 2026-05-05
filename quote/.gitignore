@@ -4,6 +4,7 @@ __pycache__/
 
 db.sqlite
 output/*.pdf
+exports/*.csv
 data/*.xlsx
 data/*.xls
 

@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="fr">
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Devis {{ quote_year }}-{{ "%05d"|format(quote_number) }}</title>
+  <title>Quote {{ quote_year }}-{{ "%05d"|format(quote_number) }}</title>
   <style>
     @page {
       size: A4;
@@ -236,28 +236,27 @@
       <strong>{{ supplier.name }}</strong><br>
       {{ supplier.legal_form }}<br>
       {{ supplier.address }}<br>
-      SIRET {{ supplier.siret }} - TVA {{ supplier.tva_number }}<br>
+      SIRET {{ supplier.siret }} - VAT {{ supplier.tva_number }}<br>
       {{ supplier.phone }} - {{ supplier.email }}
     </div>
   </header>
 
-  <h1 class="title">DEVIS</h1>
+  <h1 class="title">QUOTE</h1>
 
   <section class="two-column">
     <div class="column">
       <div class="meta-box">
-        <div class="box-title">Informations devis</div>
-        <strong>N° Devis :</strong> DEV-{{ quote_year }}-{{ "%05d"|format(quote_number) }}<br>
-        <strong>Date d'émission :</strong> {{ emission_date }}<br>
-        <strong>Valable jusqu'au :</strong> {{ validity_date }}
+        <div class="box-title">Quote details</div>
+        <strong>Quote no.:</strong> QUO-{{ quote_year }}-{{ "%05d"|format(quote_number) }}<br>
+        <strong>Issue date:</strong> {{ emission_date }}<br>
+        <strong>Valid until:</strong> {{ validity_date }}
       </div>
     </div>
     <div class="column">
       <div class="meta-box">
-        <div class="box-title">Références</div>
-        <strong>Commande :</strong> {{ order.order_id }}<br>
-        <strong>Date commande :</strong> {{ order.order_date }}<br>
-        <strong>Décision agent :</strong> {{ order.agent_decision }}
+        <div class="box-title">References</div>
+        <strong>Order:</strong> {{ order.order_id }}<br>
+        <strong>Order date:</strong> {{ order.order_date }}
       </div>
     </div>
   </section>
@@ -265,7 +264,7 @@
   <section class="two-column">
     <div class="column">
       <div class="client-box">
-        <div class="box-title">Facturer à</div>
+        <div class="box-title">Bill to</div>
         <strong>{{ client.company_name }}</strong><br>
         {{ client.contact_name }}<br>
         {{ client.address }}<br>
@@ -277,9 +276,9 @@
     </div>
     <div class="column">
       <div class="client-box">
-        <div class="box-title">Livrer à</div>
+        <div class="box-title">Ship to</div>
         {{ order.delivery_address or client.address }}<br>
-        {% if order.delivery_date %}<strong>Date prévue :</strong> {{ order.delivery_date }}<br>{% endif %}
+        {% if order.delivery_date %}<strong>Expected date:</strong> {{ order.delivery_date }}<br>{% endif %}
         <strong>Incoterm :</strong> {{ config.quote.default_incoterm }}
       </div>
     </div>
@@ -288,12 +287,12 @@
   <table class="lines">
     <thead>
       <tr>
-        <th>N°</th>
-        <th>Référence</th>
-        <th class="description">Désignation & specs</th>
-        <th class="numeric">Qté</th>
-        <th class="numeric">Prix U. HT</th>
-        <th class="numeric">Montant HT</th>
+        <th>No.</th>
+        <th>Reference</th>
+        <th class="description">Description & specs</th>
+        <th class="numeric">Qty</th>
+        <th class="numeric">Unit price excl. VAT</th>
+        <th class="numeric">Amount excl. VAT</th>
       </tr>
     </thead>
     <tbody>
@@ -307,7 +306,7 @@
               <div class="muted">{{ line.description_specs }}</div>
             {% endif %}
             {% if line.unit %}
-              <div class="muted">Unité : {{ line.unit }}</div>
+              <div class="muted">Unit: {{ line.unit }}</div>
             {% endif %}
           </td>
           <td class="numeric">{{ line.qty }}</td>
@@ -321,51 +320,51 @@
   <section class="totals-wrap">
     <div class="totals">
       <div class="totals-row">
-        <div class="totals-label">Total HT</div>
+        <div class="totals-label">Subtotal excl. VAT</div>
         <div class="totals-value">{{ totals.total_ht_fmt }}</div>
       </div>
       <div class="totals-row">
-        <div class="totals-label">Base TVA</div>
+        <div class="totals-label">VAT base</div>
         <div class="totals-value">{{ totals.total_ht_with_fees_fmt }}</div>
       </div>
       <div class="totals-row">
-        <div class="totals-label">TVA {{ totals.tva_rate_fmt }}</div>
+        <div class="totals-label">VAT {{ totals.tva_rate_fmt }}</div>
         <div class="totals-value">{{ totals.tva_amount_fmt }}</div>
       </div>
       <div class="totals-row grand-total">
-        <div class="totals-label">TOTAL TTC</div>
+        <div class="totals-label">TOTAL INCL. VAT</div>
         <div class="totals-value">{{ totals.total_ttc_fmt }}</div>
       </div>
     </div>
   </section>
 
   <section class="conditions">
-    <div class="box-title">Conditions commerciales</div>
-    <strong>Paiement :</strong> {{ config.quote.payment_default }}<br>
-    <strong>Livraison :</strong> {{ config.quote.default_incoterm }}<br>
-    <strong>Validité :</strong> offre valable jusqu'au {{ validity_date }}<br>
-    <strong>Pénalités de retard :</strong> {{ config.quote.penalty_rate }}<br>
+    <div class="box-title">Commercial terms</div>
+    <strong>Payment:</strong> {{ config.quote.payment_default }}<br>
+    <strong>Delivery:</strong> {{ config.quote.default_incoterm }}<br>
+    <strong>Validity:</strong> this offer is valid until {{ validity_date }}<br>
+    <strong>Late payment penalties:</strong> {{ config.quote.penalty_rate }}<br>
     {% if config.quote.reserve_clause %}
-      <strong>Réserve de propriété :</strong> les marchandises restent la propriété du fournisseur jusqu'au paiement complet.
+      <strong>Retention of title:</strong> goods remain the supplier's property until full payment has been received.
     {% endif %}
     {% if order.notes %}
-      <br><strong>Notes :</strong> {{ order.notes }}
+      <br><strong>Notes:</strong> {{ order.notes }}
     {% endif %}
   </section>
 
   <section class="signature">
     <div class="signature-box">
-      <div class="box-title">Fournisseur</div>
+      <div class="box-title">Supplier</div>
       {{ supplier.name }}
     </div>
     <div class="signature-box">
-      <div class="box-title">Bon pour accord</div>
-      Date, cachet et signature client
+      <div class="box-title">Accepted by client</div>
+      Date, stamp and signature
     </div>
   </section>
 
   <footer class="footer">
-    {{ supplier.name }} - {{ supplier.legal_form }} - {{ supplier.address }} - SIRET {{ supplier.siret }} - TVA {{ supplier.tva_number }}
+    {{ supplier.name }} - {{ supplier.legal_form }} - {{ supplier.address }} - SIRET {{ supplier.siret }} - VAT {{ supplier.tva_number }}
   </footer>
 </body>
 </html>

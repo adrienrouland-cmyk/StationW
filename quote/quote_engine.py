@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import base64
+import csv
 import os
-import sqlite3
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
@@ -307,27 +307,63 @@ def calculate_totals(order: dict[str, Any], config: dict[str, Any]) -> dict[str,
     }
 
 
-def get_next_quote_number(db_path: str, order_id: str | None = None) -> tuple[int, int]:
-    path = Path(db_path)
+def get_next_quote_number(export_path: str) -> tuple[int, int]:
+    path = Path(export_path)
+    if not path.exists():
+        return 1, datetime.now().year
+
+    max_quote_number = 0
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            try:
+                max_quote_number = max(
+                    max_quote_number, int(row.get("quote_number", "0") or "0")
+                )
+            except ValueError:
+                continue
+
+    return max_quote_number + 1, datetime.now().year
+
+
+def append_quote_export(
+    export_path: str,
+    order_id: str,
+    quote_number: int,
+    quote_year: int,
+    pdf_path: Path,
+    totals: dict[str, Any],
+) -> None:
+    path = Path(export_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    now = datetime.now()
+    fieldnames = [
+        "created_at",
+        "quote_number",
+        "quote_year",
+        "order_id",
+        "pdf_filename",
+        "pdf_path",
+        "total_ht_eur",
+        "total_ttc_eur",
+    ]
+    write_header = not path.exists() or path.stat().st_size == 0
 
-    with sqlite3.connect(path) as connection:
-        cursor = connection.cursor()
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS quote_counter
-            (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, order_id TEXT)
-            """
+    with path.open("a", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        if write_header:
+            writer.writeheader()
+        writer.writerow(
+            {
+                "created_at": datetime.now().isoformat(timespec="seconds"),
+                "quote_number": quote_number,
+                "quote_year": quote_year,
+                "order_id": order_id,
+                "pdf_filename": pdf_path.name,
+                "pdf_path": str(pdf_path),
+                "total_ht_eur": totals["total_ht"],
+                "total_ttc_eur": totals["total_ttc"],
+            }
         )
-        cursor.execute(
-            "INSERT INTO quote_counter (created_at, order_id) VALUES (?, ?)",
-            (now.isoformat(timespec="seconds"), order_id),
-        )
-        connection.commit()
-        rowid = int(cursor.lastrowid)
-
-    return rowid, now.year
 
 
 def load_logo_base64(logo_path: str) -> str | None:
@@ -362,14 +398,14 @@ def generate_quote_pdf(
     order_id: str,
     excel_path: str,
     config: dict[str, Any],
-    db_path: str,
+    export_path: str,
     template_path: str,
     logo_path: str,
 ) -> tuple[bytes, int]:
     data = load_data(excel_path)
     order = get_order(data, order_id)
     totals = calculate_totals(order, config)
-    quote_number, quote_year = get_next_quote_number(db_path, order_id)
+    quote_number, quote_year = get_next_quote_number(export_path)
 
     template_file = Path(template_path)
     environment = Environment(
@@ -405,7 +441,8 @@ def generate_quote_pdf(
         character if character.isalnum() or character in {"-", "_"} else "_"
         for character in str(order_id)
     )
-    pdf_path = output_dir / f"devis_{quote_year}_{quote_number:05d}_{safe_order_id}.pdf"
+    pdf_path = output_dir / f"quote_{quote_year}_{quote_number:05d}_{safe_order_id}.pdf"
     pdf_path.write_bytes(pdf_bytes)
+    append_quote_export(export_path, order_id, quote_number, quote_year, pdf_path, totals)
 
     return pdf_bytes, quote_number
