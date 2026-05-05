@@ -29,3 +29,6 @@ env/
 *.swp
 *.swo
 .DS_Store
+quote/assets/
+quote/exports/
+quote/output/
