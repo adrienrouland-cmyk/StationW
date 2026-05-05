@@ -107,24 +107,48 @@ class OrderRequest(BaseModel):
 def load_products() -> dict:
     """Load products from CSV file"""
     products = {}
-    csv_path = "database/stock.csv"
-    
-    if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"CSV file not found at {csv_path}")
-    
+    # Try common filenames and delimiters (some CSVs use semicolon)
+    candidate_paths = ["database/stock.csv", "database/products.csv", "database/products.csv"]
+    csv_path = None
+    for p in candidate_paths:
+        if os.path.exists(p):
+            csv_path = p
+            break
+
+    if not csv_path:
+        raise FileNotFoundError(f"CSV file not found in database/ (tried stock.csv and products.csv)")
+
+    # detect delimiter from first line
     with open(csv_path, 'r', encoding='utf-8') as f:
-        reader = csv.DictReader(f)
+        first = f.readline()
+        delimiter = ';' if ';' in first and first.count(';') > first.count(',') else ','
+        f.seek(0)
+        reader = csv.DictReader(f, delimiter=delimiter)
         for row in reader:
             product_name = row['product_name'].strip()
             # normalize numeric fields
-            try:
-                quantity_available = int(row.get('quantity_available') or 0)
-            except ValueError:
-                quantity_available = 0
-            try:
-                price_per_unit = float(row.get('price_per_unit') or 0.0)
-            except ValueError:
-                price_per_unit = 0.0
+            # tolerate non-breaking spaces in numbers
+            def parse_int(x):
+                if x is None:
+                    return 0
+                try:
+                    return int(str(x).replace('\u202f','').replace('\xa0','').replace(' ',''))
+                except Exception:
+                    try:
+                        return int(float(str(x)))
+                    except Exception:
+                        return 0
+
+            def parse_float(x):
+                if x is None:
+                    return 0.0
+                try:
+                    return float(str(x).replace('\u202f','').replace('\xa0','').replace(' ', '').replace(',','.'))
+                except Exception:
+                    return 0.0
+
+            quantity_available = parse_int(row.get('quantity_available') or row.get('quantity available') or row.get('quantity') )
+            price_per_unit = parse_float(row.get('price_per_unit') or row.get('price per unit') or row.get('price'))
 
             products[product_name] = {
                 'name': product_name,
@@ -133,7 +157,7 @@ def load_products() -> dict:
             }
             # include optional description and sku_code if present
             desc = (row.get('description') or '').strip()
-            sku = (row.get('sku_code') or '').strip()
+            sku = (row.get('sku_code') or row.get('sku') or '').strip()
             if desc:
                 products[product_name]['description'] = desc
             else:
@@ -142,8 +166,105 @@ def load_products() -> dict:
                 products[product_name]['sku_code'] = sku
             else:
                 products[product_name]['sku_code'] = ''
-    
+
     return products
+
+
+# Validation endpoint
+@app.post("/validate-order")
+async def validate_order(order: OrderResponse):
+    """Validate a fully-populated order JSON.
+
+    Returns one of:
+    - Validated: every line has requested quantity available AND stock price >= wanted price
+    - Negotiating: at least one line has quantity shortfall or stock price < wanted price. Returns `next_step` proposals.
+    - CANCELED: input is empty or all lines have product.status == "NOT_FOUND"
+    """
+
+    # Cancelled: empty or all NOT_FOUND
+    if not order.order_lines or all((line.product.status or "").upper() == "NOT_FOUND" for line in order.order_lines):
+        return {"result": "CANCELED", "reason": "empty_or_all_not_found"}
+
+    try:
+        products = load_products()
+    except FileNotFoundError:
+        # If inventory file missing, fall back to using provided pricing only
+        products = {}
+
+    negotiating_items = []
+
+    for line in order.order_lines:
+        line_id = line.line_id
+        raw = line.product.raw_description
+        sku = (line.product.normalized.sku or "") if line.product and line.product.normalized else ""
+        requested_qty = line.quantity or 0
+        wanted_price = line.pricing.wanted_unit_price if line.pricing else None
+        stock_price = line.pricing.stock_unit_price if line.pricing else None
+
+        # Try to get authoritative inventory info when SKU or product name matches
+        inv_qty = None
+        inv_price = None
+        if sku and products:
+            # find by sku_code
+            for pmeta in products.values():
+                if (pmeta.get('sku_code') or "") == sku:
+                    inv_qty = pmeta.get('quantity_available')
+                    inv_price = pmeta.get('price_per_unit')
+                    break
+        if inv_qty is None and products:
+            # try by exact product name
+            if raw in products:
+                inv_qty = products[raw].get('quantity_available')
+                inv_price = products[raw].get('price_per_unit')
+            else:
+                # try case-insensitive match
+                for pname, pmeta in products.items():
+                    if raw and raw.lower() in pname.lower():
+                        inv_qty = pmeta.get('quantity_available')
+                        inv_price = pmeta.get('price_per_unit')
+                        break
+
+        # Decide if this line is acceptable
+        qty_issue = False
+        price_issue = False
+
+        if inv_qty is not None:
+            if requested_qty > inv_qty:
+                qty_issue = True
+        # if no authoritative inv_qty, assume provided quantity is acceptable (we can't verify)
+
+        if inv_price is not None and wanted_price is not None:
+            if inv_price < wanted_price:
+                price_issue = True
+        elif stock_price is not None and wanted_price is not None:
+            if stock_price < wanted_price:
+                price_issue = True
+
+        if qty_issue or price_issue:
+            negotiating_items.append({
+                "line_id": line_id,
+                "product": raw,
+                "requested_quantity": requested_qty,
+                "available_quantity": inv_qty,
+                "wanted_unit_price": wanted_price,
+                "stock_unit_price": inv_price if inv_price is not None else stock_price,
+                "proposal": {
+                    "offer_quantity": inv_qty if inv_qty is not None else min(requested_qty, 0),
+                    "offer_unit_price": inv_price if inv_price is not None else stock_price,
+                }
+            })
+
+    if not negotiating_items:
+        # All good
+        return {"result": "VALIDATED"}
+
+    # Negotiation required
+    return {
+        "result": "NEGOTIATING",
+        "next_step": {
+            "proposals": negotiating_items
+        }
+    }
 
 # AI parsing function
 def parse_order_with_kimi(order_text: str) -> List[dict]:
