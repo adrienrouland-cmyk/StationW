@@ -21,7 +21,7 @@ Traditional order processing is **slow, error-prone, and labor-intensive**:
 
 ## 📹 Presentation Video
 
-[Watch the full demo here](https://example.com/demo) *(insert your video link)*
+https://drive.google.com/file/d/1xDRbrXMa6NxRHJxwS2oVMK59eu30ALgJ/view?usp=sharing
 
 ---
 
