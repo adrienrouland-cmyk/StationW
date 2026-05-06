@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      KIMI_API_KEY: ${KIMI_API_KEY}
+      KIMI_API_BASE: https://taotoken.net/api/v1
+    volumes:
+      - ./database:/app/database
+    env_file:
+      - .env

@@ -1,0 +1,25 @@
+supplier:
+  name: "ACME Fournitures Industrielles SAS"
+  legal_form: "SAS au capital de 50 000 €"
+  address: "14 Rue des Artisans, 69100 Villeurbanne"
+  siret: "42312345600028"
+  tva_number: "FR12423123456"
+  phone: "+33 4 72 00 11 22"
+  email: "commercial@acme-industrie.fr"
+  logo_path: "assets/logo.png"
+
+data:
+  path: "../database/orders.csv"
+  excel_path: "data/overnight_agent_mock_db_v2.xlsx"
+
+quote_export:
+  path: "exports/quotes.csv"
+
+quote:
+  validity_days: 30
+  tva_rate: 0.20
+  default_incoterm: "DAP - Delivered at Place"
+  penalty_rate: "3 times the applicable statutory interest rate"
+  payment_default: "Bank transfer"
+  reserve_clause: true
+  template_path: "templates/quote.html"

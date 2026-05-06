@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ProcureDesk Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app" data-screen-label="ProcureDesk Dashboard">
+        <aside class="sidebar">
+            <div class="brand">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" class="brand-logo">
+                    <path d="M3 6C3 4.89543 3.89543 4 5 4H19C20.1046 4 21 4.89543 21 6V18C21 19.1046 20.1046 20 19 20H5C3.89543 20 3 19.1046 3 18V6Z" fill="#0052CC"/>
+                    <path d="M9 9L15 9M9 13L15 13M9 17L12 17" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                <div>
+                    <div class="brand-name">ProcureDesk</div>
+                    <div class="brand-sub">Sales operator</div>
+                </div>
+            </div>
+
+            <nav class="nav">
+                <div class="nav-section">Workspace</div>
+                <a href="#" class="nav-item active" id="nav-dashboard" onclick="switchView('dashboard'); return false;">
+                    <span class="nav-icon">▣</span>
+                    Dashboard
+                    <span class="nav-badge" id="nav-dashboard-count">0</span>
+                </a>
+                <a href="#" class="nav-item" id="nav-deals" onclick="switchView('deals'); return false;">
+                    <span class="nav-icon">≣</span>
+                    Deals
+                    <span class="nav-badge" id="nav-deals-count">0</span>
+                </a>
+                <a href="#" class="nav-item" id="nav-products" onclick="switchView('products'); return false;">
+                    <span class="nav-icon">◈</span>
+                    Products
+                </a>
+                <a href="#" class="nav-item" id="nav-clients" onclick="switchView('clients'); return false;">
+                    <span class="nav-icon">◫</span>
+                    Customers
+                    <span class="nav-badge" id="nav-clients-count">0</span>
+                </a>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="me">
+                    <div class="avatar">AM</div>
+                    <div>
+                        <div class="me-name">Alex Martin</div>
+                        <div class="me-role">Admin · ProcureDesk</div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <main class="main">
+            <div class="topbar">
+                <div class="crumbs">
+                    <span>Workspace</span>
+                    <span>/</span>
+                    <span class="here" id="crumb-view">Dashboard</span>
+                </div>
+            </div>
+
+            <div class="content">
+                <div class="page-head">
+                    <div>
+                        <h1 id="page-title">Dashboard</h1>
+                        <p id="page-subtitle">Where chaos becomes decisions - and decisions become revenue.</p>
+                    </div>
+                    <div class="helper-bar">
+                        <span id="helper-primary">0 open requests</span>
+                    </div>
+                </div>
+
+                <div id="dashboard-shell">
+                    <div class="kpis">
+                        <div class="card kpi">
+                            <div class="row1"><span>Total requests</span><span class="kpi-icon">⟡</span></div>
+                            <div class="val" id="stat-total-orders">0</div>
+                            <div class="delta"><span class="label">Loaded from dashboard API</span></div>
+                        </div>
+                        <div class="card kpi">
+                            <div class="row1"><span>Waiting for input</span><span class="kpi-icon blue">◐</span></div>
+                            <div class="val" id="stat-ready">0</div>
+                            <div class="delta"><span class="label">Missing required fields</span></div>
+                        </div>
+                        <div class="card kpi">
+                            <div class="row1"><span>Negotiating</span><span class="kpi-icon orange">↺</span></div>
+                            <div class="val" id="stat-negotiating">0</div>
+                            <div class="delta"><span class="label">Needs review / counter-offer</span></div>
+                        </div>
+                        <div class="card kpi">
+                            <div class="row1"><span>Quote sent</span><span class="kpi-icon violet">▣</span></div>
+                            <div class="val" id="stat-quoted">0</div>
+                            <div class="delta"><span class="label">Downloadable PDFs available</span></div>
+                        </div>
+                    </div>
+
+                    <div class="two-col">
+                        <section class="card panel">
+                            <div class="panel-head">
+                                <div>
+                                    <h3 id="orders-panel-title">Dashboard</h3>
+                                    <div class="sub" id="orders-panel-subtitle">Live operational queue</div>
+                                </div>
+                                <div class="panel-actions">
+                                    <span class="pill grey" id="orders-count-pill">0 items</span>
+                                </div>
+                            </div>
+
+                            <div id="view-dashboard" class="view active">
+                                <div class="table-container">
+                                    <table id="orders-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Order ID</th>
+                                                <th>Date</th>
+                                                <th>Details</th>
+                                                <th>Status</th>
+                                                <th>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody></tbody>
+                                    </table>
+                                </div>
+
+                                <div class="mini-section">
+                                    <div class="mini-head">
+                                        <h4>Needs attention</h4>
+                                        <span class="mini-meta" id="attention-meta">0 orders</span>
+                                    </div>
+                                    <div class="action-list" id="action-list"></div>
+                                </div>
+                            </div>
+
+                            <div id="view-deals" class="view">
+                                <div class="tabs deal-tabs" id="tabs">
+                                    <button class="tab on" data-tab="all">All <span class="count" id="cAll">0</span></button>
+                                    <button class="tab" data-tab="yes">Yes — Accepted <span class="count" id="cYes">0</span></button>
+                                    <button class="tab" data-tab="neg">Negotiation <span class="count" id="cNeg">0</span></button>
+                                    <button class="tab" data-tab="rev">Review <span class="count" id="cRev">0</span></button>
+                                </div>
+
+                                <section class="section" data-cat="yes">
+                                    <div class="cat-head">
+                                        <span class="cat-pill yes">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                                            Yes — Accepted
+                                        </span>
+                                        <span class="count-text" id="yesCount">0 deals</span>
+                                        <div class="right">
+                                            <button class="btn sm" type="button">Send all invoices</button>
+                                        </div>
+                                    </div>
+                                    <div class="card" id="yesList"></div>
+                                </section>
+
+                                <section class="section" data-cat="neg">
+                                    <div class="cat-head">
+                                        <span class="cat-pill neg">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M3 12h18M12 3v18"/></svg>
+                                            Negotiation
+                                        </span>
+                                        <span class="count-text" id="negCount">0 deals</span>
+                                    </div>
+                                    <div class="card" id="negList"></div>
+                                </section>
+
+                                <section class="section" data-cat="rev">
+                                    <div class="cat-head">
+                                        <span class="cat-pill rev">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>
+                                            Review
+                                        </span>
+                                        <span class="count-text" id="revCount">0 deals</span>
+                                    </div>
+                                    <div class="card" id="revList"></div>
+                                </section>
+                            </div>
+
+                            <div id="view-products" class="view">
+                                <div class="products-head">
+                                    <div>
+                                        <h3>Products</h3>
+                                        <div class="sub">Connected to <span>database/products.csv</span></div>
+                                    </div>
+                                    <button class="btn primary sm" type="button" id="new-product-btn">New product</button>
+                                </div>
+                                <div class="table-container">
+                                    <table id="products-table">
+                                        <thead>
+                                            <tr>
+                                                <th>SKU</th>
+                                                <th>Product</th>
+                                                <th>Brand</th>
+                                                <th>Category</th>
+                                                <th>Unit</th>
+                                                <th>Price</th>
+                                                <th>Qty</th>
+                                                <th>MOQ</th>
+                                                <th>Refill</th>
+                                                <th>Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody></tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <div id="view-clients" class="view">
+                                <div class="table-container">
+                                    <table id="clients-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Client ID</th>
+                                                <th>Company</th>
+                                                <th>Score</th>
+                                                <th>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="card panel side-panel">
+                            <div class="panel-head">
+                                <div>
+                                    <h3>Overview</h3>
+                                    <div class="sub">Operational status by queue</div>
+                                </div>
+                            </div>
+                            <div class="overview-list" id="overview-list"></div>
+                        </section>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div class="modal-overlay" id="negotiating-modal">
+        <div class="modal">
+            <h2>Negotiate Proposal</h2>
+            <div id="modal-content">
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button class="btn btn-primary" id="btn-save-proposal" onclick="saveAndSendQuote()">Save & Send Quote</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

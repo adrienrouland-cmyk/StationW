@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Quote {{ quote_year }}-{{ "%05d"|format(quote_number) }}</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 15mm 15mm 20mm 15mm;
+      @bottom-center {
+        content: "Page " counter(page) " / " counter(pages);
+        font-size: 8pt;
+        color: #6b7280;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: Arial, sans-serif;
+      font-size: 10pt;
+      color: #1a1a1a;
+      line-height: 1.35;
+      margin: 0;
+    }
+
+    .header {
+      display: table;
+      width: 100%;
+      margin-bottom: 12mm;
+    }
+
+    .header-left,
+    .header-right {
+      display: table-cell;
+      vertical-align: top;
+      width: 50%;
+    }
+
+    .header-right {
+      text-align: right;
+      color: #374151;
+      font-size: 9pt;
+    }
+
+    .logo {
+      max-width: 120px;
+      max-height: 70px;
+    }
+
+    .supplier-name {
+      color: #1A2B4A;
+      font-size: 15pt;
+      font-weight: 700;
+      max-width: 80mm;
+    }
+
+    .title {
+      color: #1A2B4A;
+      border-bottom: 2px solid #1A2B4A;
+      font-size: 24pt;
+      font-weight: 700;
+      margin: 0 0 8mm;
+      padding-bottom: 3mm;
+      text-align: center;
+    }
+
+    .two-column {
+      display: table;
+      width: 100%;
+      margin-bottom: 7mm;
+    }
+
+    .column {
+      display: table-cell;
+      width: 50%;
+      vertical-align: top;
+    }
+
+    .column + .column {
+      padding-left: 8mm;
+    }
+
+    .meta-box,
+    .client-box,
+    .conditions {
+      border: 1px solid #1A2B4A;
+      padding: 4mm;
+    }
+
+    .box-title {
+      color: #1A2B4A;
+      font-weight: 700;
+      font-size: 9pt;
+      margin-bottom: 2mm;
+      text-transform: uppercase;
+    }
+
+    .muted {
+      color: #6b7280;
+      font-size: 8pt;
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+
+    .lines {
+      margin-top: 7mm;
+    }
+
+    .lines th {
+      background: #1A2B4A;
+      color: #fff;
+      font-size: 8pt;
+      padding: 2.4mm 2mm;
+      text-align: left;
+    }
+
+    .lines td {
+      border-bottom: 1px solid #d9dee8;
+      padding: 2.4mm 2mm;
+      vertical-align: top;
+    }
+
+    .lines tr {
+      page-break-inside: avoid;
+    }
+
+    .lines tbody tr:nth-child(even) td {
+      background: #F5F7FA;
+    }
+
+    .numeric {
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .description {
+      width: 42%;
+    }
+
+    .separator td {
+      background: #fff !important;
+      border-bottom: 1px solid #1A2B4A;
+      height: 3mm;
+      padding: 0;
+    }
+
+    .totals-wrap {
+      display: table;
+      width: 100%;
+      margin-top: 7mm;
+    }
+
+    .totals {
+      display: table;
+      margin-left: auto;
+      width: 72mm;
+      border-collapse: collapse;
+    }
+
+    .totals-row {
+      display: table-row;
+    }
+
+    .totals-label,
+    .totals-value {
+      display: table-cell;
+      border-bottom: 1px solid #d9dee8;
+      padding: 2mm;
+    }
+
+    .totals-value {
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .grand-total .totals-label,
+    .grand-total .totals-value {
+      background: #1A2B4A;
+      color: #fff;
+      font-size: 12pt;
+      font-weight: 700;
+    }
+
+    .conditions {
+      margin-top: 8mm;
+      font-size: 9pt;
+      page-break-inside: avoid;
+    }
+
+    .signature {
+      display: table;
+      width: 100%;
+      margin-top: 8mm;
+      page-break-inside: avoid;
+    }
+
+    .signature-box {
+      display: table-cell;
+      width: 50%;
+      border: 1px solid #1A2B4A;
+      height: 30mm;
+      padding: 4mm;
+      vertical-align: top;
+    }
+
+    .signature-box + .signature-box {
+      border-left: 0;
+    }
+
+    .footer {
+      border-top: 1px solid #d9dee8;
+      color: #6b7280;
+      font-size: 8pt;
+      margin-top: 8mm;
+      padding-top: 3mm;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="header-left">
+      {% if logo_b64 %}
+        <img class="logo" src="{{ logo_b64 }}" alt="{{ supplier.name }}">
+      {% else %}
+        <div class="supplier-name">{{ supplier.name }}</div>
+      {% endif %}
+    </div>
+    <div class="header-right">
+      <strong>{{ supplier.name }}</strong><br>
+      {{ supplier.legal_form }}<br>
+      {{ supplier.address }}<br>
+      SIRET {{ supplier.siret }} - VAT {{ supplier.tva_number }}<br>
+      {{ supplier.phone }} - {{ supplier.email }}
+    </div>
+  </header>
+
+  <h1 class="title">QUOTE</h1>
+
+  <section class="two-column">
+    <div class="column">
+      <div class="meta-box">
+        <div class="box-title">Quote details</div>
+        <strong>Quote no.:</strong> QUO-{{ quote_year }}-{{ "%05d"|format(quote_number) }}<br>
+        <strong>Issue date:</strong> {{ emission_date }}<br>
+        <strong>Valid until:</strong> {{ validity_date }}
+      </div>
+    </div>
+    <div class="column">
+      <div class="meta-box">
+        <div class="box-title">References</div>
+        <strong>Order:</strong> {{ order.order_id }}<br>
+        <strong>Order date:</strong> {{ order.order_date }}
+      </div>
+    </div>
+  </section>
+
+  <section class="two-column">
+    <div class="column">
+      <div class="client-box">
+        <div class="box-title">Bill to</div>
+        <strong>{{ client.company_name }}</strong><br>
+        {{ client.contact_name }}<br>
+        {{ client.address }}<br>
+        {{ client.city }}<br>
+        {% if client.siret %}SIRET {{ client.siret }}<br>{% endif %}
+        {% if client.email %}{{ client.email }}<br>{% endif %}
+        {% if client.phone %}{{ client.phone }}{% endif %}
+      </div>
+    </div>
+    <div class="column">
+      <div class="client-box">
+        <div class="box-title">Ship to</div>
+        {{ order.delivery_address or client.address }}<br>
+        {% if order.delivery_date %}<strong>Expected date:</strong> {{ order.delivery_date }}<br>{% endif %}
+        <strong>Incoterm :</strong> {{ config.quote.default_incoterm }}
+      </div>
+    </div>
+  </section>
+
+  <table class="lines">
+    <thead>
+      <tr>
+        <th>No.</th>
+        <th>Reference</th>
+        <th class="description">Description & specs</th>
+        <th class="numeric">Quantity</th>
+        <th class="numeric">Unit price excl. VAT</th>
+        <th class="numeric">Amount excl. VAT</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for line in lines %}
+        <tr>
+          <td>{{ line.line_id }}</td>
+          <td>{{ line.sku }}</td>
+          <td>
+            <strong>{{ line.product_name }}</strong>
+            {% if line.description_specs %}
+              <div class="muted">{{ line.description_specs }}</div>
+            {% endif %}
+            {% if line.unit %}
+              <div class="muted">Unit: {{ line.unit }}</div>
+            {% endif %}
+          </td>
+          <td class="numeric">{{ line.qty }}</td>
+          <td class="numeric">{{ line.unit_price_eur_fmt }}</td>
+          <td class="numeric">{{ line.line_total_ht_fmt }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <section class="totals-wrap">
+    <div class="totals">
+      <div class="totals-row">
+        <div class="totals-label">Subtotal excl. VAT</div>
+        <div class="totals-value">{{ totals.total_ht_fmt }}</div>
+      </div>
+      <div class="totals-row">
+        <div class="totals-label">VAT base</div>
+        <div class="totals-value">{{ totals.total_ht_with_fees_fmt }}</div>
+      </div>
+      <div class="totals-row">
+        <div class="totals-label">VAT {{ totals.tva_rate_fmt }}</div>
+        <div class="totals-value">{{ totals.tva_amount_fmt }}</div>
+      </div>
+      <div class="totals-row grand-total">
+        <div class="totals-label">TOTAL INCL. VAT</div>
+        <div class="totals-value">{{ totals.total_ttc_fmt }}</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="conditions">
+    <div class="box-title">Commercial terms</div>
+    <strong>Payment:</strong> {{ config.quote.payment_default }}<br>
+    <strong>Delivery:</strong> {{ config.quote.default_incoterm }}<br>
+    <strong>Validity:</strong> this offer is valid until {{ validity_date }}<br>
+    <strong>Late payment penalties:</strong> {{ config.quote.penalty_rate }}<br>
+    {% if config.quote.reserve_clause %}
+      <strong>Retention of title:</strong> goods remain the supplier's property until full payment has been received.
+    {% endif %}
+  </section>
+
+  <section class="signature">
+    <div class="signature-box">
+      <div class="box-title">Supplier</div>
+      {{ supplier.name }}
+    </div>
+    <div class="signature-box">
+      <div class="box-title">Accepted by client</div>
+      Date, stamp and signature
+    </div>
+  </section>
+
+  <footer class="footer">
+    {{ supplier.name }} - {{ supplier.legal_form }} - {{ supplier.address }} - SIRET {{ supplier.siret }} - VAT {{ supplier.tva_number }}
+  </footer>
+</body>
+</html>
